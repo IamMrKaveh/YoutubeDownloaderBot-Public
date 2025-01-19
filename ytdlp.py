@@ -6,20 +6,20 @@ import os
 import telegram.error
 
 # توکن ربات خود را اینجا قرار دهید
-TOKEN = 'bot token'
+TOKEN = 'token bot'
 
 # ایجاد کلاینت Pyrogram برای ربات (خارج از تابع)
 app = Client(
     name="username_bot",
     bot_token=TOKEN,
-    api_id=1000,
+    api_id=1111,
     api_hash="api_hash"
     )
 
 # تنظیمات yt-dlp برای دانلود ویدئو
-ydl_opts = {
+ydl_opts_video = {
     'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-    'outtmpl': 'downloads/%(title)s.%(ext)s',
+    'outtmpl': '%(title)s.%(ext)s',
     'merge_output_format': 'mp4',
     'cookiefile': 'cookies.txt',
     'no_part': True,
@@ -34,6 +34,26 @@ ydl_opts = {
             'skip': ['dash', 'hls'],
         },
     },
+}
+
+ydl_opts_playlist = {
+    'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',  # حداکثر کیفیت 720p و فقط mp4
+    'outtmpl': '%(playlist_index)s - %(title)s.%(ext)s',  # نام فایل خروجی
+    'merge_output_format': 'mp4',  # ادغام ویدئو و صدا به فرمت mp4
+    'cookiefile': 'cookies.txt',
+    'no_part': True,
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    },
+    'retries': 10,
+    'fragment_retries': 10,
+    'buffer_size': 1024 * 1024,
+    'extractor_args': {
+        'youtube': {
+            'skip': ['dash', 'hls'],
+        },
+    },
+    'noplaylist': False,  # اجازه دانلود پلی‌لیست
 }
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -92,28 +112,37 @@ async def download_video_handler(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f'خطا: {e}')
         context.user_data[user_id]['is_downloading'] = False
 
+# تابع دانلود پلی‌لیست
+def download_playlist_videos(url):
+    with YoutubeDL(ydl_opts_playlist) as ydl:
+        info = ydl.extract_info(url, download=True)
+        if 'entries' in info:  # اگر پلی‌لیست باشد
+            return info['entries']
+        return [info]  # اگر تک ویدئو باشد
+
 async def download_playlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
     user_id = update.message.from_user.id
     try:
-        message = await update.message.reply_text('در حال یافتن کیفیت های موجود...')
-        with YoutubeDL(ydl_opts) as ydl:
-            playlist_info = ydl.extract_info(url, download=False)
-            if not playlist_info or 'entries' not in playlist_info:
-                await update.message.reply_text('خطا: اطلاعات پلی‌لیست یافت نشد. لطفاً لینک را بررسی کنید.')
-                return
+        # دانلود پلی‌لیست
+        await update.message.reply_text("در حال دانلود پلی‌لیست...")
 
-            video_urls = [video['url'] for video in playlist_info['entries']]
-            context.user_data['playlist_urls'] = video_urls
-            context.user_data['playlist_titles'] = [video['title'] for video in playlist_info['entries']]
-            await message.edit_text(f'تعداد ویدئوهای پلی‌لیست: {len(video_urls)}\nلطفاً ویدئو مورد نظر را انتخاب کنید:')
-            keyboard = [
-                [InlineKeyboardButton(f"ویدئو {i+1}: {title}", callback_data=f"select_video_{i}")]
-                for i, title in enumerate(context.user_data['playlist_titles'])
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await message.edit_text('لطفاً ویدئو مورد نظر را انتخاب کنید:', reply_markup=reply_markup)
+        videos = download_playlist_videos(url)
+
+        # ارسال ویدئوها به تلگرام
+        async with app:
+            for video in videos:
+                file_path = f"{video['playlist_index']} - {video['title']}.mp4"
+                if os.path.exists(file_path):
+                    await update.message.reply_text(f"در حال ارسال ویدئو: {file_path}")
+                    await send_video_as_whole(update, file_path)
+                    os.remove(file_path)  # حذف فایل پس از ارسال
+                else:
+                    await update.message.reply_text(f"فایل {file_path} یافت نشد.")
+
+        await update.message.reply_text('دانلود و ارسال ویدئوهای پلی‌لیست به پایان رسید.')
     except Exception as e:
         await update.message.reply_text(f'خطا: {e}')
+    finally:
         context.user_data[user_id]['is_downloading'] = False
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -160,9 +189,9 @@ async def select_video_quality(query, video_url, context):
 async def download_video_with_format(query, url, format_id, context, user_id):
     filename = None
     try:
-        ydl_opts['format'] = format_id
+        ydl_opts_video['format'] = format_id
         await query.edit_message_text('در حال دانلود...')
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(ydl_opts_video) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             await query.edit_message_text('در حال آپلود...')
@@ -174,22 +203,17 @@ async def download_video_with_format(query, url, format_id, context, user_id):
             os.remove(filename)
         context.user_data[user_id]['is_downloading'] = False
 
-async def send_video_as_whole(query, filename):
+async def send_video_as_whole(update, filename):
     try:
         # بررسی وجود فایل
         if not os.path.exists(filename):
-            await query.edit_message_text('خطا: فایل یافت نشد.')
+            await update.message.reply_text('خطا: فایل یافت نشد.')
             return
 
         # بررسی اندازه فایل
         file_size = os.path.getsize(filename)
         if file_size > 2000 * 1024 * 1024:  # اگر فایل بزرگ‌تر از 2000 مگابایت باشد
-            await query.edit_message_text('خطا: اندازه فایل بیشتر از 2000 مگابایت است و نمی‌توان آن را ارسال کرد.')
-            return
-
-        # بررسی وجود chat.id
-        if not query.message or not query.message.chat:
-            await query.edit_message_text('خطا: اطلاعات چت یافت نشد.')
+            await update.message.reply_text('خطا: اندازه فایل بیشتر از 2000 مگابایت است و نمی‌توان آن را ارسال کرد.')
             return
 
         # شروع کلاینت Pyrogram اگر قبلاً شروع نشده است
@@ -198,14 +222,14 @@ async def send_video_as_whole(query, filename):
 
         # آپلود فایل
         await app.send_video(
-            chat_id=query.message.chat.id,
+            chat_id=update.message.chat.id,
             video=filename,
             caption=os.path.basename(filename),
             supports_streaming=True
         )
 
     except Exception as e:
-        await query.edit_message_text(f'خطا در ارسال ویدئو: {e}')
+        await update.message.reply_text(f'خطا در ارسال ویدئو: {e}')
     finally:
         # توقف کلاینت Pyrogram اگر لازم است
         if app.is_connected:
@@ -213,7 +237,7 @@ async def send_video_as_whole(query, filename):
 
 def get_video_info(url):
     try:
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(ydl_opts_video) as ydl:
             info = ydl.extract_info(url, download=False)
             formats = info.get('formats', [])
             video_info = []
