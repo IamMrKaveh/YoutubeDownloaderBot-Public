@@ -1,11 +1,20 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 from yt_dlp import YoutubeDL
+from pyrogram import Client
 import os
 import telegram.error
 
 # توکن ربات خود را اینجا قرار دهید
-TOKEN = 'enter Your Token Bot'
+TOKEN = 'bot token'
+
+# ایجاد کلاینت Pyrogram برای ربات (خارج از تابع)
+app = Client(
+    name="username_bot",
+    bot_token=TOKEN,
+    api_id=1000,
+    api_hash="api_hash"
+    )
 
 # تنظیمات yt-dlp برای دانلود ویدئو
 ydl_opts = {
@@ -167,26 +176,40 @@ async def download_video_with_format(query, url, format_id, context, user_id):
 
 async def send_video_as_whole(query, filename):
     try:
+        # بررسی وجود فایل
+        if not os.path.exists(filename):
+            await query.edit_message_text('خطا: فایل یافت نشد.')
+            return
+
         # بررسی اندازه فایل
         file_size = os.path.getsize(filename)
         if file_size > 2000 * 1024 * 1024:  # اگر فایل بزرگ‌تر از 2000 مگابایت باشد
             await query.edit_message_text('خطا: اندازه فایل بیشتر از 2000 مگابایت است و نمی‌توان آن را ارسال کرد.')
             return
 
-        # ایجاد یک شیء از کلاس Bot
-        bot = Bot(token=TOKEN)
+        # بررسی وجود chat.id
+        if not query.message or not query.message.chat:
+            await query.edit_message_text('خطا: اطلاعات چت یافت نشد.')
+            return
 
-        # ارسال فایل ویدئو با قابلیت استریم
-        with open(filename, 'rb') as video_file:
-            await bot.send_video(
-                chat_id=query.message.chat_id,
-                video=video_file,
-                caption=os.path.basename(filename),
-                supports_streaming=True  # فعال‌سازی قابلیت استریم
-            )
-        
+        # شروع کلاینت Pyrogram اگر قبلاً شروع نشده است
+        if not app.is_connected:
+            await app.start()
+
+        # آپلود فایل
+        await app.send_video(
+            chat_id=query.message.chat.id,
+            video=filename,
+            caption=os.path.basename(filename),
+            supports_streaming=True
+        )
+
     except Exception as e:
         await query.edit_message_text(f'خطا در ارسال ویدئو: {e}')
+    finally:
+        # توقف کلاینت Pyrogram اگر لازم است
+        if app.is_connected:
+            await app.stop()
 
 def get_video_info(url):
     try:
