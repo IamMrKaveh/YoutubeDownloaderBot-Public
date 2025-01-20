@@ -10,9 +10,9 @@ TOKEN = 'token bot'
 
 # ایجاد کلاینت Pyrogram برای ربات (خارج از تابع)
 app = Client(
-    name="username_bot",
+    name="usernamebot",
     bot_token=TOKEN,
-    api_id=1111,
+    api_id='api_id',
     api_hash="api_hash"
     )
 
@@ -38,7 +38,7 @@ ydl_opts_video = {
 
 ydl_opts_playlist = {
     'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',  # حداکثر کیفیت 720p و فقط mp4
-    'outtmpl': '%(playlist_index)s - %(title)s.%(ext)s',  # نام فایل خروجی
+    'outtmpl': '%(title)s.%(ext)s',  # نام فایل خروجی
     'merge_output_format': 'mp4',  # ادغام ویدئو و صدا به فرمت mp4
     'cookiefile': 'cookies.txt',
     'no_part': True,
@@ -116,9 +116,14 @@ async def download_video_handler(update: Update, context: ContextTypes.DEFAULT_T
 def download_playlist_videos(url):
     with YoutubeDL(ydl_opts_playlist) as ydl:
         info = ydl.extract_info(url, download=True)
-        if 'entries' in info:  # اگر پلی‌لیست باشد
-            return info['entries']
-        return [info]  # اگر تک ویدئو باشد
+        
+    # مسیر پوشه کنار فایل پایتون
+    current_directory = os.path.dirname(os.path.abspath(__file__))
+
+    # پیدا کردن فایل‌های با پسوند .mp4
+    mp4_files = [f for f in os.listdir(current_directory) if f.endswith('.mp4')]
+    
+    return mp4_files
 
 async def download_playlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
     user_id = update.message.from_user.id
@@ -131,13 +136,12 @@ async def download_playlist_handler(update: Update, context: ContextTypes.DEFAUL
         # ارسال ویدئوها به تلگرام
         async with app:
             for video in videos:
-                file_path = f"{video['playlist_index']} - {video['title']}.mp4"
-                if os.path.exists(file_path):
-                    await update.message.reply_text(f"در حال ارسال ویدئو: {file_path}")
-                    await send_video_as_whole(update, file_path)
-                    os.remove(file_path)  # حذف فایل پس از ارسال
+                if os.path.exists(video):
+                    await update.message.reply_text(f"در حال ارسال ویدئو: {video}")
+                    await send_video_as_whole(update, video)
+                    os.remove(video)  # حذف فایل پس از ارسال
                 else:
-                    await update.message.reply_text(f"فایل {file_path} یافت نشد.")
+                    await update.message.reply_text(f"فایل {video} یافت نشد.")
 
         await update.message.reply_text('دانلود و ارسال ویدئوهای پلی‌لیست به پایان رسید.')
     except Exception as e:
