@@ -117,11 +117,11 @@ def download_playlist_videos(url):
     with YoutubeDL(ydl_opts_playlist) as ydl:
         info = ydl.extract_info(url, download=True)
         
-    # مسیر پوشه کنار فایل پایتون
-    current_directory = os.path.dirname(os.path.abspath(__file__))
+    # مسیر پوشه کنار پروژه
+    current_directory = os.getcwd()
 
     # پیدا کردن فایل‌های با پسوند .mp4
-    mp4_files = [f for f in os.listdir(current_directory) if f.endswith('.mp4')]
+    mp4_files = [f for f in os.listdir(current_directory) if f.endswith('.mp4') and os.path.isfile(os.path.join(current_directory, f))]
     
     return mp4_files
 
@@ -130,16 +130,19 @@ async def download_playlist_handler(update: Update, context: ContextTypes.DEFAUL
     try:
         # دانلود پلی‌لیست
         await update.message.reply_text("در حال دانلود پلی‌لیست...")
+        
+        #i want to download and send youtube playlist video to telegram
 
         videos = download_playlist_videos(url)
 
         # ارسال ویدئوها به تلگرام
         async with app:
             for video in videos:
-                if os.path.exists(video):
+                file_path = os.path.join(os.getcwd(), video)  # مسیر کامل فایل
+                if os.path.exists(file_path):
                     await update.message.reply_text(f"در حال ارسال ویدئو: {video}")
-                    await send_video_as_whole(update, video)
-                    os.remove(video)  # حذف فایل پس از ارسال
+                    await send_video_as_whole(update, file_path)
+                    os.remove(file_path)  # حذف فایل پس از ارسال
                 else:
                     await update.message.reply_text(f"فایل {video} یافت نشد.")
 
