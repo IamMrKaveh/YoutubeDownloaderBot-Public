@@ -22,38 +22,24 @@ ydl_opts_video = {
     'outtmpl': '%(title)s.%(ext)s',
     'merge_output_format': 'mp4',
     'cookiefile': 'cookies.txt',
-    'no_part': True,
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    },
+    'ignoreerrors': True,  # اضافه کردن این خط برای نادیده گرفتن خطاها در پلی‌لیست
     'retries': 10,
-    'fragment_retries': 10,
-    'buffer_size': 1024 * 1024,
-    'extractor_args': {
-        'youtube': {
-            'skip': ['dash', 'hls'],
-        },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
     },
 }
 
 ydl_opts_playlist = {
     'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',  # حداکثر کیفیت 720p و فقط mp4
-    'outtmpl': '%(title)s.%(ext)s',  # نام فایل خروجی
-    'merge_output_format': 'mp4',  # ادغام ویدئو و صدا به فرمت mp4
+    'outtmpl': '%(playlist_index)s - %(title)s.%(ext)s',  # نام فایل خروجی
+    'ignoreerrors': True,  # خطای ویدیوهای ناموفق را نادیده می‌گیرد
     'cookiefile': 'cookies.txt',
-    'no_part': True,
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    },
     'retries': 10,
-    'fragment_retries': 10,
-    'buffer_size': 1024 * 1024,
-    'extractor_args': {
-        'youtube': {
-            'skip': ['dash', 'hls'],
-        },
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
     },
-    'noplaylist': False,  # اجازه دانلود پلی‌لیست
 }
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,6 +100,7 @@ async def download_video_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 # تابع دانلود پلی‌لیست
 def download_playlist_videos(url):
+    ydl_opts_playlist['ignoreerrors'] = True  # اطمینان از فعال بودن
     with YoutubeDL(ydl_opts_playlist) as ydl:
         info = ydl.extract_info(url, download=True)
         
@@ -125,31 +112,42 @@ def download_playlist_videos(url):
     
     return mp4_files
 
+async def send_playlist(update):
+    # مسیر پوشه کنار پروژه
+    current_directory = os.getcwd()
+
+    # پیدا کردن فایل‌های با پسوند .mp4
+    videos = [f for f in os.listdir(current_directory) if f.endswith('.mp4') and os.path.isfile(os.path.join(current_directory, f))]
+    
+    async with app:
+        for video in videos:
+            file_path = os.path.join(os.getcwd(), video)  # مسیر کامل فایل
+            if os.path.exists(file_path):
+                await send_video_as_whole(update, file_path)
+                os.remove(file_path)  # حذف فایل پس از ارسال
+            else:
+                await update.message.reply_text(f"فایل {video} یافت نشد.")
+    
 async def download_playlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
     user_id = update.message.from_user.id
     try:
         # دانلود پلی‌لیست
         await update.message.reply_text("در حال دانلود پلی‌لیست...")
-        
-        #i want to download and send youtube playlist video to telegram
 
         videos = download_playlist_videos(url)
+        
+        await update.message.reply_text("در حال آپلود پلی‌لیست...")
 
         # ارسال ویدئوها به تلگرام
-        async with app:
-            for video in videos:
-                file_path = os.path.join(os.getcwd(), video)  # مسیر کامل فایل
-                if os.path.exists(file_path):
-                    await update.message.reply_text(f"در حال ارسال ویدئو: {video}")
-                    await send_video_as_whole(update, file_path)
-                    os.remove(file_path)  # حذف فایل پس از ارسال
-                else:
-                    await update.message.reply_text(f"فایل {video} یافت نشد.")
+        await send_playlist(update)
 
         await update.message.reply_text('دانلود و ارسال ویدئوهای پلی‌لیست به پایان رسید.')
     except Exception as e:
         await update.message.reply_text(f'خطا: {e}')
+        await send_playlist(update)
+        
     finally:
+        await send_playlist(update)
         context.user_data[user_id]['is_downloading'] = False
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -249,7 +247,7 @@ def get_video_info(url):
             formats = info.get('formats', [])
             video_info = []
             for f in formats:
-                if f.get('height') and f.get('ext') == 'mp4':
+                if f.get('height'):
                     filesize = f.get('filesize', 0) or 0
                     if filesize > 0:
                         video_info.append({
