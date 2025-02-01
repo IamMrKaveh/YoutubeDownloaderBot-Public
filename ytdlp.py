@@ -18,22 +18,33 @@ app = Client(
 
 # تنظیمات yt-dlp برای دانلود ویدئو
 ydl_opts_video = {
-    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'format': 'bestvideo*+bestaudio/best',
     'outtmpl': '%(title)s.%(ext)s',
     'merge_output_format': 'mp4',
     'cookiefile': 'cookies.txt',
-    'ignoreerrors': True,  # اضافه کردن این خط برای نادیده گرفتن خطاها در پلی‌لیست
     'retries': 10,
     'http_headers': {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
     },
+    # اضافه کردن این تنظیمات جدید
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web'],
+            'skip': ['hls', 'dash']
+        }
+    },
+    'allow_multiple_video_streams': True,
+    'nocheckcertificate': True,
+    'age_limit': 100,  # عبور از محدودیت سنی
+    'force-ipv4': True,
+    'geo_bypass': True,
+    'geo_bypass_country': 'US'
 }
 
 ydl_opts_playlist = {
     'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best',  # حداکثر کیفیت 720p و فقط mp4
     'outtmpl': '%(playlist_index)s - %(title)s.%(ext)s',  # نام فایل خروجی
-    'ignoreerrors': True,  # خطای ویدیوهای ناموفق را نادیده می‌گیرد
     'cookiefile': 'cookies.txt',
     'retries': 10,
     'http_headers': {
@@ -100,7 +111,6 @@ async def download_video_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 # تابع دانلود پلی‌لیست
 def download_playlist_videos(url):
-    ydl_opts_playlist['ignoreerrors'] = True  # اطمینان از فعال بودن
     with YoutubeDL(ydl_opts_playlist) as ydl:
         info = ydl.extract_info(url, download=True)
         
@@ -210,54 +220,91 @@ async def download_video_with_format(query, url, format_id, context, user_id):
 
 async def send_video_as_whole(update, filename):
     try:
-        # بررسی وجود فایل
-        if not os.path.exists(filename):
-            await update.message.reply_text('خطا: فایل یافت نشد.')
-            return
-
-        # بررسی اندازه فایل
-        file_size = os.path.getsize(filename)
-        if file_size > 2000 * 1024 * 1024:  # اگر فایل بزرگ‌تر از 2000 مگابایت باشد
-            await update.message.reply_text('خطا: اندازه فایل بیشتر از 2000 مگابایت است و نمی‌توان آن را ارسال کرد.')
-            return
-
-        # شروع کلاینت Pyrogram اگر قبلاً شروع نشده است
-        if not app.is_connected:
-            await app.start()
-
-        # آپلود فایل
+        # افزودن قابلیت ارسال فایل‌های بزرگ
+        await app.send_chat_action(
+            chat_id=update.message.chat.id,
+            action="upload_video"
+        )
+        
+        # تقسیم فایل‌های بزرگ به بخش‌های 50MB
         await app.send_video(
             chat_id=update.message.chat.id,
             video=filename,
             caption=os.path.basename(filename),
-            supports_streaming=True
+            supports_streaming=True,
+            file_size=os.path.getsize(filename),
+            read_timeout=300,
+            write_timeout=300,
+            connect_timeout=300
         )
-
     except Exception as e:
-        await update.message.reply_text(f'خطا در ارسال ویدئو: {e}')
-    finally:
-        # توقف کلاینت Pyrogram اگر لازم است
-        if app.is_connected:
-            await app.stop()
+        print(f"Upload Error: {str(e)}")
+        # تلاش مجدد با روش تقسیم
+        await split_and_send(update, filename)
+
+async def split_and_send(update, filename):
+    chunk_size = 50 * 1024 * 1024  # 50MB
+    with open(filename, 'rb') as f:
+        index = 1
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            part_name = f"{filename}_part{index}"
+            with open(part_name, 'wb') as p:
+                p.write(chunk)
+            await app.send_document(
+                chat_id=update.message.chat.id,
+                document=part_name
+            )
+            os.remove(part_name)
+            index += 1
 
 def get_video_info(url):
     try:
         with YoutubeDL(ydl_opts_video) as ydl:
+            # افزودن لاگ برای دیباگ
+            ydl.add_postprocessor(**{
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': 'mp4'
+            })
+            
             info = ydl.extract_info(url, download=False)
+            if not info:
+                return None, None
+
             formats = info.get('formats', [])
             video_info = []
-            for f in formats:
-                if f.get('height'):
-                    filesize = f.get('filesize', 0) or 0
-                    if filesize > 0:
-                        video_info.append({
-                            'resolution': f'{f["height"]}p',
-                            'filesize': filesize // 1024 // 1024,
-                            'format_id': f['format_id'],
-                        })
-            return info['title'], video_info
+            
+            # فیلتر فرمت‌های معتبر
+            valid_formats = [
+                f for f in formats 
+                if f.get('vcodec') != 'none' 
+                and f.get('acodec') != 'none'
+                and f.get('filesize') is not None
+            ]
+
+            # مرتب سازی بر اساس کیفیت
+            valid_formats.sort(
+                key=lambda x: (-x.get('height', 0), x.get('filesize', 0))
+            )
+
+            for f in valid_formats:
+                filesize_mb = f.get('filesize', 0) // 1024 // 1024
+                if filesize_mb > 0:
+                    video_info.append({
+                        'resolution': f'{f.get("height", 0)}p',
+                        'filesize': filesize_mb,
+                        'format_id': f['format_id'],
+                    })
+
+            return info.get('title', 'Unknown'), video_info
+
     except Exception as e:
-        print(f"خطا در دریافت اطلاعات ویدئو: {e}")
+        print(f"Error Details: {str(e)}")
+        # دیباگ پیشرفته
+        if hasattr(e, 'exc_info') and e.exc_info[0] == 'YouTube':
+            print("Possible Geo-restriction or Age restriction")
         return None, None
 
 def main() -> None:
